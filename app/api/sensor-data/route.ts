@@ -11,6 +11,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Faltan campos: temperature, pressure, smoke" }, { status: 400 });
   }
 
+  // Descartar lecturas imposibles (sensor aún calentando o mal contacto)
+  if (temperature > 100 || temperature < -40 || pressure < 300 || pressure > 1100 || (humidity !== null && humidity > 100)) {
+    return NextResponse.json({ ok: false, reason: "Lectura fuera de rango, descartada" }, { status: 422 });
+  }
+
   const reading = sensorStore.push({ temperature, pressure, humidity, smoke, node_id });
 
   return NextResponse.json({ ok: true, reading }, { status: 201 });
