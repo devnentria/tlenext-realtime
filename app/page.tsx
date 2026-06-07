@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { riskConfig, type SensorReading, type RiskLevel } from "@/lib/dummy-data";
 import type { StoredReading } from "@/lib/sensor-store";
+import type { WeatherForecast } from "@/app/api/weather/route";
 import { cn } from "@/lib/utils";
 import dynamic from "next/dynamic";
 import FloatingAI from "@/components/FloatingAI";
@@ -21,11 +22,18 @@ function computeRiskLevel(r: StoredReading): RiskLevel {
   return "verde";
 }
 
-function computeFireProbability(r: StoredReading): number {
+function computeFireProbability(r: StoredReading, rainProbability = 0): number {
   let p = 0;
   p += Math.min(40, Math.max(0, (r.temperature - 20) * 2));
   p += Math.min(30, Math.max(0, (r.smoke - 50) / 10));
   if (r.humidity != null) p += Math.min(30, Math.max(0, (50 - r.humidity) * 0.6));
+
+  // Lluvia pronosticada reduce significativamente el riesgo:
+  // 20-40% lluvia → -15%, 40-70% → -30%, >70% → -50%
+  if (rainProbability >= 70) p *= 0.50;
+  else if (rainProbability >= 40) p *= 0.70;
+  else if (rainProbability >= 20) p *= 0.85;
+
   return Math.min(99, Math.round(p));
 }
 
@@ -217,6 +225,49 @@ function RiskBanner({ level, connected }: { level: RiskLevel; connected: boolean
   );
 }
 
+function WeatherWidget({ weather }: { weather: WeatherForecast | null }) {
+  if (!weather) return null;
+  const { rainProbability, description, nextRainHours, tempOutdoor } = weather;
+
+  const rainColor =
+    rainProbability >= 70 ? "text-blue-400 border-blue-500/30 bg-blue-500/5" :
+    rainProbability >= 40 ? "text-sky-400 border-sky-500/30 bg-sky-500/5" :
+    rainProbability >= 20 ? "text-slate-300 border-slate-500/20 bg-white/4" :
+    "text-slate-500 border-slate-700/30 bg-white/3";
+
+  return (
+    <div className={cn("flex items-center gap-3 rounded-2xl border px-5 py-3.5", rainColor)}>
+      <div className="flex flex-col">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-0.5">Pronóstico · La Malinche</p>
+        <p className="text-sm font-semibold capitalize">{description}</p>
+      </div>
+      <div className="ml-auto flex items-center gap-4 text-right">
+        {tempOutdoor != null && (
+          <div>
+            <p className="text-[9px] text-slate-600">Temp. exterior</p>
+            <p className="text-sm font-black text-orange-400">{tempOutdoor.toFixed(1)} °C</p>
+          </div>
+        )}
+        <div>
+          <p className="text-[9px] text-slate-600">Prob. lluvia</p>
+          <p className="text-lg font-black">{rainProbability}%</p>
+        </div>
+        {nextRainHours != null && nextRainHours <= 9 && (
+          <div>
+            <p className="text-[9px] text-slate-600">Lluvia en</p>
+            <p className="text-sm font-black text-blue-400">~{nextRainHours}h</p>
+          </div>
+        )}
+        {rainProbability >= 20 && (
+          <div className="rounded-xl bg-blue-500/10 border border-blue-500/20 px-2 py-1 text-[10px] text-blue-400 font-semibold whitespace-nowrap">
+            ↓ riesgo reducido
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function WaitingOverlay() {
   return (
     <div className="flex flex-col items-center justify-center gap-4 py-12 text-center">
@@ -298,6 +349,7 @@ export default function Dashboard() {
   const [chartData, setChartData] = useState<SensorReading[]>([]);
   const [history, setHistory] = useState<StoredReading[]>([]);
   const [time, setTime] = useState("");
+  const [weather, setWeather] = useState<WeatherForecast | null>(null);
 
   useEffect(() => {
     async function fetchData() {
@@ -318,9 +370,20 @@ export default function Dashboard() {
       }
     }
 
+    async function fetchWeather() {
+      try {
+        const res = await fetch("/api/weather");
+        if (res.ok) setWeather(await res.json());
+      } catch {
+        // sin clave o sin red — ignorar
+      }
+    }
+
     fetchData();
+    fetchWeather();
     const iv = setInterval(fetchData, 5000);
-    return () => clearInterval(iv);
+    const ivW = setInterval(fetchWeather, 10 * 60 * 1000); // cada 10 min
+    return () => { clearInterval(iv); clearInterval(ivW); };
   }, []);
 
   useEffect(() => {
@@ -330,7 +393,8 @@ export default function Dashboard() {
   }, []);
 
   const riskLevel: RiskLevel = liveReading ? computeRiskLevel(liveReading) : "verde";
-  const fireProbability = liveReading ? computeFireProbability(liveReading) : 0;
+  const rainProbability = weather?.rainProbability ?? 0;
+  const fireProbability = liveReading ? computeFireProbability(liveReading, rainProbability) : 0;
   const prediction = liveReading ? computePrediction(history, riskLevel) : null;
 
   return (
@@ -380,6 +444,7 @@ export default function Dashboard() {
       <main className="flex-1 max-w-[1700px] mx-auto w-full px-4 md:px-5 py-5 space-y-5">
 
         <RiskBanner level={riskLevel} connected={connected} />
+        <WeatherWidget weather={weather} />
 
         {/* Metric cards */}
         <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
@@ -466,7 +531,16 @@ export default function Dashboard() {
         </div>
 
         <FloatingAlerts />
-        <FloatingAI />
+        <FloatingAI
+          temperature={liveReading?.temperature ?? null}
+          humidity={liveReading?.humidity ?? null}
+          pressure={liveReading?.pressure ?? null}
+          smoke={liveReading?.smoke ?? null}
+          connected={connected}
+          rainProbability={weather?.rainProbability}
+          weatherDescription={weather?.description}
+          nextRainHours={weather?.nextRainHours}
+        />
 
         <div className="flex flex-wrap items-center justify-between gap-2 py-3 border-t border-white/4">
           <p className="text-[10px] text-slate-700">

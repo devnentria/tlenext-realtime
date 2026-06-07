@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { currentReadings } from "@/lib/dummy-data";
 import { cn } from "@/lib/utils";
 
 interface AIResponse {
@@ -16,7 +15,18 @@ const riskColors: Record<string, string> = {
   naranja: "text-orange-400", rojo: "text-red-400",
 };
 
-export default function FloatingAI() {
+interface Props {
+  temperature: number | null;
+  humidity: number | null;
+  pressure: number | null;
+  smoke: number | null;
+  connected: boolean;
+  rainProbability?: number;
+  weatherDescription?: string;
+  nextRainHours?: number | null;
+}
+
+export default function FloatingAI({ temperature, humidity, pressure, smoke, connected, rainProbability, weatherDescription, nextRainHours }: Props) {
   const [open, setOpen]     = useState(false);
   const [result, setResult] = useState<AIResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -30,11 +40,14 @@ export default function FloatingAI() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          temperature: currentReadings.temperature,
-          humidity:    currentReadings.humidity,
-          pressure:    currentReadings.pressure,
-          smoke:       currentReadings.smoke,
-          location:    currentReadings.location,
+          temperature,
+          humidity,
+          pressure,
+          smoke,
+          location: "ESP32-N1 · La Malinche",
+          rainProbability,
+          weatherDescription,
+          nextRainHours,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -82,12 +95,17 @@ export default function FloatingAI() {
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {/* Current readings snapshot */}
+          {!connected && (
+            <div className="rounded-xl bg-yellow-500/10 border border-yellow-500/20 p-3">
+              <p className="text-xs text-yellow-400">Sin conexión con el sensor. Conecta el ESP32 primero.</p>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-2">
             {[
-              { label: "Temperatura", value: `${currentReadings.temperature} °C`, color: "text-orange-400" },
-              { label: "Humedad",     value: `${currentReadings.humidity} %`,     color: "text-sky-400"    },
-              { label: "Presión",     value: `${currentReadings.pressure} hPa`,   color: "text-emerald-400"},
-              { label: "Humo",        value: `${currentReadings.smoke} ppm`,      color: "text-violet-400" },
+              { label: "Temperatura", value: temperature != null ? `${temperature} °C` : "—", color: "text-orange-400" },
+              { label: "Humedad",     value: humidity    != null ? `${humidity} %`     : "—", color: "text-sky-400"    },
+              { label: "Presión",     value: pressure    != null ? `${pressure} hPa`   : "—", color: "text-emerald-400"},
+              { label: "Humo",        value: smoke       != null ? `${smoke} ppm`      : "—", color: "text-violet-400" },
             ].map(m => (
               <div key={m.label} className="rounded-xl bg-white/4 px-3 py-2">
                 <p className="text-[10px] text-slate-500">{m.label}</p>
@@ -98,11 +116,11 @@ export default function FloatingAI() {
 
           {/* Analyze button */}
           {!result && (
-            <button onClick={analyze} disabled={loading}
+            <button onClick={analyze} disabled={loading || !connected}
               className={cn(
                 "w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-semibold transition-all",
-                loading
-                  ? "bg-violet-500/10 text-violet-400 cursor-not-allowed"
+                (loading || !connected)
+                  ? "bg-violet-500/10 text-violet-400 cursor-not-allowed opacity-60"
                   : "bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20"
               )}>
               {loading ? (
